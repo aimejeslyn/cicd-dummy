@@ -1,7 +1,10 @@
-name: Deploy to server
+name: CI/CD for Nginx Load Balancer
 
 on:
   push:
+    branches:
+      - main
+  pull_request:
     branches:
       - main
 
@@ -10,39 +13,46 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-    - name: Create short SHA
-      run: echo "SHORT_SHA=$(echo $GITHUB_SHA | cut -c1-7)" >> $GITHUB_ENV
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
 
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v1
+      - name: Cache Docker layers
+        uses: actions/cache@v3
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
 
-    - name: Build and push Docker image
-      run: |
-        docker build -t aimejeslyn/cicd-dummy:${{ env.SHORT_SHA }} .
-        echo ${{ secrets.DOCKER_PASSWORD }} | docker login -u ${{ secrets.DOCKER_USERNAME }} --password-stdin
-        docker push aimejeslyn/cicd-dummy:${{ env.SHORT_SHA }}
+      - name: Log in to DockerHub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
 
-    outputs:
-      SHORT_SHA: ${{ env.SHORT_SHA }}
+      - name: Build and push Docker image
+        id: docker_build
+        uses: docker/build-push-action@v3
+        with:
+          context: .
+          file: nginx/Dockerfile
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/cicd-dummy:latest
 
   deploy:
     runs-on: ubuntu-latest
     needs: build
-
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
-
-    - name: SSH into server and deploy
-      uses: appleboy/ssh-action@master
-      with:
-        host: ${{ secrets.SERVER_HOST }}
-        username: ${{ secrets.SERVER_USERNAME }}
-        key: ${{ secrets.SERVER_SSH_KEY }}
-        script: |
-          docker pull aimejeslyn/cicd-dummy:${{ needs.build.outputs.SHORT_SHA }}
-          docker rm -f cicd-dummy || true
-          docker run -d -p 80:80 --name cicd-dummy aimejeslyn/cicd-dummy:${{ needs.build.outputs.SHORT_SHA }}
+      - name: Deploy to Server
+        uses: appleboy/ssh-action@v0.1.8
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            docker pull aimejeslyn/cicd-dummy:latest
+            docker rm -f cicd-dummy || true
+            docker run -d --name cicd-dummy -p 80:80 aimejeslyn/cicd-dummy:latest
